@@ -24,4 +24,6 @@ the source to learn the not too well documented AST structure.
 
 This project is currently experimental, there is no compatibility
 promise for the structure of the XML in later versions, or that there
-will be later versions or even a release version at all.     
+will be later versions or even a release version at all.
+
+Any suggestion or comment is more than welcome.
