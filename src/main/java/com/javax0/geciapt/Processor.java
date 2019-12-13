@@ -1,6 +1,8 @@
 package com.javax0.geciapt;
 
 import com.sun.source.tree.LiteralTree;
+import com.sun.source.tree.ModifiersTree;
+import com.sun.source.tree.PrimitiveTypeTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.util.Trees;
 
@@ -10,23 +12,24 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Name;
 import javax.lang.model.element.TypeElement;
-import javax.tools.FileObject;
 import javax.tools.StandardLocation;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.reflect.Method;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @SupportedAnnotationTypes("*")
 @SupportedSourceVersion(SourceVersion.RELEASE_11)
 public class Processor extends AbstractProcessor {
     private Trees trees;
-
     @Override
     public void init(ProcessingEnvironment pe) {
         super.init(pe);
@@ -39,18 +42,23 @@ public class Processor extends AbstractProcessor {
     public final boolean process(final Set<? extends TypeElement> annotations,
                                  final RoundEnvironment roundEnv) {
         for (final var element : roundEnv.getRootElements()) {
-            final var output = element.toString().replaceAll("\\.", "/") + ".xml";
+            final String output;
+            if (element.getKind() == ElementKind.MODULE) {
+                output = "module-info.xml";
+            } else {
+                output = element.toString().replaceAll("\\.", "/") + ".xml";
+            }
 
-            FileObject builderFile = null;
             try {
-                builderFile = processingEnv.getFiler().createResource(StandardLocation.CLASS_OUTPUT,
-                    ""
-                    , output);
-                try (final OutputStream w = builderFile.openOutputStream(); final PrintWriter out = new PrintWriter(w)) {
+                final var fo = processingEnv.getFiler().createResource(StandardLocation.CLASS_OUTPUT, "", output);
+                try (final OutputStream w = fo.openOutputStream(); final PrintWriter out = new PrintWriter(w)) {
                     System.out.println("Processing: " + element.toString());
-                    outputTree(out, 0, trees.getPath(element).getLeaf());
-                    out.flush();
-                    w.flush();
+                    final var klass = toTag(trees.getPath(element).getLeaf());
+                    if (element.getKind() == ElementKind.CLASS) {
+                        klass.attribute("package", element.getEnclosingElement());
+                        klass.attribute("module", element.getEnclosingElement().getEnclosingElement());
+                    }
+                    out.print(klass.toString());
                 }
             } catch (IOException e) {
                 e.printStackTrace();
@@ -59,65 +67,123 @@ public class Processor extends AbstractProcessor {
         return false;
     }
 
-    void outputTree(PrintWriter out, int tab, Tree t) {
+    Tag toTag(Tree t) {
         if (processed.containsKey(t)) {
-            return;
+            return null;
         }
         processed.put(t, null);
-        out.println(" ".repeat(tab) + "<" + t.getKind().name() + " class=\"" + t.getClass().getName() + "\">");
-        final Method[] methods = t.getClass().getMethods();
+        final var tagName = t.getKind().name().toLowerCase();
+        final Tag tag;
+        if (t instanceof LiteralTree) {
+            final var literal = (LiteralTree) t;
+            final Object value = literal.getValue();
+            tag = Tag.xml(tagName, value == null ? null : value.toString());
+        } else {
+            tag = Tag.xml(tagName);
+        }
+        addName(tag, t);
+        handleSpecialTrees(t, tag);
+        final Method[] methods = t.getKind().asInterface().getMethods();
         for (final var method : methods) {
-            if (Tree.class.isAssignableFrom(method.getReturnType())) {
-                if (method.getParameterCount() == 0) {
+            if (returnsSomeTreeType(method)) {
+                if (hasNoArguments(method)) {
                     try {
                         final var subTree = (Tree) method.invoke(t);
                         if (subTree != null) {
-                            outputTree(out, tab + 2, subTree);
+                            final var subtag = toTag(subTree);
+                            subtag.attribute("source", ungetterize(method.getName()));
+                            tag.subtag(subtag);
                         }
                     } catch (Exception e) {
-                        out.println(" ".repeat(tab) + "<ERROR>");
-                        out.println(" ".repeat(tab) + e.toString());
-                        out.println(" ".repeat(tab) + "</ERROR>");
+                        addErrorTag(tag, e);
                     }
                 }
             }
-            if (Name.class.isAssignableFrom(method.getReturnType()) && method.getParameterCount() == 0) {
-                try {
-                    final var name = (Name) method.invoke(t);
-                    if (name != null) {
-                        out.println(" ".repeat(tab) + "<NAME name=\"" + name + "\" from=\"" + method.getName() + "\"/>");
-                    }
-                } catch (Exception e) {
-                    out.println(" ".repeat(tab) + "<ERROR>");
-                    out.println(" ".repeat(tab) + e.toString());
-                    out.println(" ".repeat(tab) + "</ERROR>");
-                }
-            }
-            if (method.getReturnType().equals(List.class)) {
-                if (method.getParameterCount() == 0) {
+
+            if (List.class.isAssignableFrom(method.getReturnType())) {
+                if (hasNoArguments(method)) {
+                    final Tag listTag = Tag.xml("list");
+                    listTag.attribute("of", ungetterize(method.getName()));
                     try {
-                        final var subTrees = (List) method.invoke(t);
+                        final var subTrees = (List<?>) method.invoke(t);
                         if (subTrees != null) {
                             for (final var subTree : subTrees) {
-                                if (subTree != null && subTree instanceof Tree) {
-                                    outputTree(out, tab + 2, (Tree) subTree);
+                                if (subTree instanceof Tree) {
+                                    listTag.subtag(toTag((Tree) subTree));
                                 }
                             }
                         }
                     } catch (Exception e) {
-                        out.println(" ".repeat(tab) + "<ERROR>");
-                        out.println(" ".repeat(tab) + e.toString());
-                        out.println(" ".repeat(tab) + "</ERROR>");
+                        addErrorTag(tag, e);
+                    }
+                    if (listTag.hasSubTags()) {
+                        tag.subtag(listTag);
                     }
                 }
             }
         }
-        if (t instanceof LiteralTree) {
-            final var literal = (LiteralTree) t;
-            final Object value = literal.getValue();
-            out.println(" ".repeat(tab) + "<![CDATA[" + value.toString() + "]]>");
+        return tag;
+    }
+
+    private void handleSpecialTrees(Tree t, Tag tag) {
+        switch (t.getKind()) {
+            case MODIFIERS:
+                tag.attribute("values", ((ModifiersTree) t).getFlags().stream().map(m -> m.toString().toLowerCase()).collect(Collectors.joining(", ")));
+                break;
+            case PRIMITIVE_TYPE:
+                tag.attribute("type", ((PrimitiveTypeTree) t).getPrimitiveTypeKind().toString().toLowerCase());
+                break;
+            case CLASS:
+                break;
         }
-        out.println(" ".repeat(tab) + "</" + t.getKind().name() + ">");
+    }
+
+    private void addErrorTag(Tag tag, Exception e) {
+        final var sw = new StringWriter();
+        final var pw = new PrintWriter(sw);
+        e.printStackTrace(pw);
+        pw.close();
+        try {
+            sw.close();
+        } catch (IOException ex) {
+        }
+        tag.subtag(Tag.xml("ERROR", sw.toString()));
+    }
+
+    private static boolean hasNoArguments(Method method) {
+        return method.getParameterCount() == 0;
+    }
+
+    private boolean returnsSomeTreeType(Method method) {
+        return Tree.class.isAssignableFrom(method.getReturnType());
+    }
+
+    private static void addName(Tag tag, Tree t) {
+        final Method[] methods = t.getKind().asInterface().getMethods();
+        for (final var method : methods) {
+            if (returnsName(method) && hasNoArguments(method)) {
+                try {
+                    final var name = (Name) method.invoke(t);
+                    tag.attribute("name", name);
+                    tag.attribute("source", ungetterize(method.getName()));
+                } catch (Exception e) {
+                }
+            }
+        }
+    }
+
+    private static String ungetterize(String getterName) {
+        if (getterName.startsWith("get")) {
+            getterName = getterName.substring(3);
+        }
+        if (getterName.length() > 0) {
+            getterName = Character.toLowerCase(getterName.charAt(0)) + getterName.substring(1);
+        }
+        return getterName;
+    }
+
+    private static boolean returnsName(Method method) {
+        return Name.class.isAssignableFrom(method.getReturnType());
     }
 
 }
