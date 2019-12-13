@@ -1,6 +1,7 @@
 package com.javax0.geciapt;
 
 import com.sun.source.tree.LiteralTree;
+import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.ModifiersTree;
 import com.sun.source.tree.PrimitiveTypeTree;
 import com.sun.source.tree.Tree;
@@ -85,44 +86,66 @@ public class Processor extends AbstractProcessor {
         handleSpecialTrees(t, tag);
         final Method[] methods = t.getKind().asInterface().getMethods();
         for (final var method : methods) {
-            if (returnsSomeTreeType(method)) {
-                if (hasNoArguments(method)) {
-                    try {
-                        final var subTree = (Tree) method.invoke(t);
-                        if (subTree != null) {
-                            final var subtag = toTag(subTree);
-                            subtag.attribute("source", ungetterize(method.getName()));
-                            tag.subtag(subtag);
-                        }
-                    } catch (Exception e) {
-                        addErrorTag(tag, e);
-                    }
-                }
-            }
+            addEnumTag(tag, method, t);
+            addSubTags(tag, method, t);
+            addTagList(tag, method, t);
+        }
+        return tag;
+    }
 
-            if (List.class.isAssignableFrom(method.getReturnType())) {
-                if (hasNoArguments(method)) {
-                    final Tag listTag = Tag.xml("list");
-                    listTag.attribute("of", ungetterize(method.getName()));
-                    try {
-                        final var subTrees = (List<?>) method.invoke(t);
-                        if (subTrees != null) {
-                            for (final var subTree : subTrees) {
-                                if (subTree instanceof Tree) {
-                                    listTag.subtag(toTag((Tree) subTree));
-                                }
+    private void addTagList(Tag tag, Method method, Tree t) {
+        if (List.class.isAssignableFrom(method.getReturnType())) {
+            if (hasNoArguments(method)) {
+                final Tag listTag = Tag.xml(ungetterize(method.getName()));
+                try {
+                    final var subTrees = (List<?>) method.invoke(t);
+                    if (subTrees != null) {
+                        for (final var subTree : subTrees) {
+                            if (subTree instanceof Tree) {
+                                listTag.subtag(toTag((Tree) subTree));
                             }
                         }
-                    } catch (Exception e) {
-                        addErrorTag(tag, e);
                     }
-                    if (listTag.hasSubTags()) {
-                        tag.subtag(listTag);
-                    }
+                } catch (Exception e) {
+                    addErrorTag(tag, e);
+                }
+                if (listTag.hasSubTags()) {
+                    tag.subtag(listTag);
                 }
             }
         }
-        return tag;
+    }
+
+    private void addSubTags(Tag tag, Method method, Tree t) {
+        if (returnsSomeTreeType(method)) {
+            if (hasNoArguments(method)) {
+                try {
+                    final var subTree = (Tree) method.invoke(t);
+                    if (subTree != null) {
+                        final var subtag = toTag(subTree);
+                        subtag.attribute("source", ungetterize(method.getName()));
+                        tag.subtag(subtag);
+                    }
+                } catch (Exception e) {
+                    addErrorTag(tag, e);
+                }
+            }
+        }
+    }
+
+    private void addEnumTag(Tag tag, Method method, Tree t) {
+        if (!method.getName().equals("getKind") && Enum.class.isAssignableFrom(method.getReturnType()) && hasNoArguments(method)) {
+            try {
+                final var anEnum = method.invoke(t);
+                if (anEnum != null) {
+                    final var subtag = Tag.xml(ungetterize(method.getName()));
+                    subtag.attribute("value", anEnum.toString().toLowerCase());
+                    tag.subtag(subtag);
+                }
+            } catch (Exception e) {
+                addErrorTag(tag, e);
+            }
+        }
     }
 
     private void handleSpecialTrees(Tree t, Tag tag) {
@@ -133,7 +156,11 @@ public class Processor extends AbstractProcessor {
             case PRIMITIVE_TYPE:
                 tag.attribute("type", ((PrimitiveTypeTree) t).getPrimitiveTypeKind().toString().toLowerCase());
                 break;
-            case CLASS:
+            case MEMBER_SELECT:
+                try {
+                    Thread.sleep(0);
+                } catch (InterruptedException e) {
+                }
                 break;
         }
     }
@@ -165,7 +192,7 @@ public class Processor extends AbstractProcessor {
                 try {
                     final var name = (Name) method.invoke(t);
                     tag.attribute("name", name);
-                    tag.attribute("source", ungetterize(method.getName()));
+                    tag.attribute("nameSource", ungetterize(method.getName()));
                 } catch (Exception e) {
                 }
             }

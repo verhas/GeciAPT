@@ -26,6 +26,11 @@ public class Tag {
 
     public void attribute(final String name, final Object value) {
         if (value != null ) {
+            if( attributes.containsKey(name)){
+                final var e = new RuntimeException(name+" is double defined in "+tag);
+                e.printStackTrace();
+                throw e;
+            }
             attributes.put(name, value.toString());
         }
     }
