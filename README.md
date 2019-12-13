@@ -9,7 +9,7 @@ to do is add a dependency
     <groupId>com.javax0.geci</groupId>
     <artifactId>geciapt</artifactId>
     <version>1.0.0</version>
-    <scope>compile</scope>
+    <scope>provided</scope>
 </dependency>
 ``` 
 
